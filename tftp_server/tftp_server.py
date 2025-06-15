@@ -10,22 +10,19 @@ class TftpServer():
         self.protocol = None
         self.logger = logger
     
-    async def listen(self) -> None:
-        self.transport, self.protocol = await asyncio.get_running_loop().create_datagram_endpoint(
+    def listen(self) -> None:
+        endpoint = (event_loop := asyncio.get_event_loop()).create_datagram_endpoint(
             lambda: TftpServerProtocol(self, logger=self.logger),
             local_addr=(self.config.host, self.config.port)
         )
         self.logger.info(f"TFTP server listening on {self.config.host}:{self.config.port}")
-        try:
-            await asyncio.Event().wait()  # Wait forever
-        finally:
-            self.transport.close()
-        
+        event_loop.run_until_complete(endpoint)
+        event_loop.run_forever()
+    
     
     def start(self) -> None:
         try:
-            self.logger.info(f"Starting TFTP server on {self.config.host}:{self.config.port}")
-            asyncio.run(self.listen())
+            self.listen()
         except KeyboardInterrupt:
             self.logger.info("TFTP server stopped by user")
     

@@ -6,6 +6,19 @@ from dataclasses import dataclass
 from tftp_server.protocol.files_handler import get_file, FileType
 
 @dataclass
+class TftpCounters:
+    """
+    Class to hold counters for the TFTP server i.e. number of retrie and any other counters that might be needed.
+    """
+    retries: int = 0  # Number of retries for the current request
+
+    def reset(self):
+        """
+        Reset the counters to their initial values.
+        """
+        self.retries = 0
+
+@dataclass
 class StateConfig:
     """
     Base Configuration for ephemeral connections states
@@ -57,7 +70,9 @@ class TftpServerProtocol(asyncio.DatagramProtocol):
                     lambda: TftpEphemeralPortProtocol(base_file_dir=self.server.config.file_directory, 
                                                       client_ip=addr[0], client_port=addr[1], 
                                                       initial_data=data, logger=self.logger,
-                                                      file_block_size=self.server.config.max_block_size),
+                                                      file_block_size=self.server.config.max_block_size
+                                                      , timeout=self.server.config.timeout,
+                                                      retries=self.server.config.retries),
                     local_addr=(self.server.config.host, 0) # binds to an ephemeral port
                 )
             )
@@ -67,7 +82,8 @@ class TftpServerProtocol(asyncio.DatagramProtocol):
             return        
 
 class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
-    def __init__(self,file_block_size: int, base_file_dir: str, client_ip: str, client_port: int, initial_data, logger: logging.Logger = None):
+    def __init__(self, file_block_size: int, base_file_dir: str, client_ip: str
+                 , client_port: int, initial_data:bytes, timeout:int, retries:int, logger: logging.Logger = None):
         self.logger = logger
         self.base_file_dir: str = base_file_dir 
         self.client_ip:int = client_ip
@@ -77,6 +93,10 @@ class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
         self.state: ServerStates = ServerStates.INITIAL
         self.state_config: StateConfig = None
         self.block_size: int = file_block_size
+        self.timeout:int = timeout
+        self.max_retries: int = retries
+        self._counters: TftpCounters = TftpCounters()  # Counters for the TFTP server
+        self._timeout_handle: asyncio.Handle | None = None  # Handle for the timeout task 
 
     def connection_made(self, transport) -> None:
         self.transport = transport
@@ -92,11 +112,14 @@ class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
             self.transport.close()
             return
         # Handle the request and send a response
+        self._reset_timeout()
+        self._counters.reset()  # Reset the counters for each new packet received
         if self.state == ServerStates.RRQ and packet.opcode == packets.Opcode.ACK:
             self.logger.info(f"Handling RRQ continuation for {self.state_config.filename} in mode {self.state_config.mode}")
             self.handle_rrq_connection(packet, addr)
         elif self.state == ServerStates.WRQ and packet.opcode == packets.Opcode.DATA:
             self.logger.info(f"Handling WRQ continuation for {self.state_config.filename} in mode {self.state_config.mode}")
+            self.send_error(packets.ErrorCode.ILLEGAL_OPERATION, "Write requests are not supported yet")
         elif self.state == ServerStates.KILL:
             self.logger.info(f"ephemeral port feature is complete, killing socket")
             self.transport.close()
@@ -145,7 +168,7 @@ class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
         """
         Handles the first time the client makes a request to the server and the file is fetched.
         """
-        file_data = future.result()
+        file_data:bytes = future.result()
         if file_data is None:
             self.logger.error(f"File {self.state_config.filename} not found or inaccessible")
             self.send_error(packets.ErrorCode.NOT_FOUND, f"File {self.state_config.filename} not found")
@@ -189,17 +212,64 @@ class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
             messages it receives, the first connection can be maintained while
             the second is rejected by returning an error packet.
             """
-            self.send_error(packets.ErrorCode.ILLEGAL_OPERATION, "Unexpected client address")
+            self.send_error(packets.ErrorCode.UNKNOWN_TID, "Unexpected client address")
             return
         if packet.block == self.state_config.block - 1:
-            self.send_data_block()
-        #asking for a retransmit    
+            self.send_data_block()    
         else:
             self.logger.warning(f"Received ACK for block {packet.block} but expected block {self.state_config.block - 1}")
-        
-        
+
+    def _cancel_timeout(self):
+        """
+        Cancel the timeout task if it exists.
+        """
+        if self._timeout_handle:
+            self._timeout_handle.cancel()
+            self._timeout_handle = None    
+
+    def _reset_timeout(self):
+        """
+        Reset the timeout task to the initial timeout value.
+        """
+        self._cancel_timeout()
+        self._timeout_handle = asyncio.get_event_loop().call_later(self.timeout, self._handle_timeout)
+
+    def _handle_timeout(self):
+        """
+        Handle the timeout event.
+        If the maximum number of retries is reached, close the connection.
+        Otherwise, resend the last data block.
+        """
+        if self._counters.retries > self.max_retries:
+            self.logger.error(f"Maximum retries reached for {self.client_ip}:{self.client_port}, closing connection")
+            # do not need to send a packet becasue the conenction is assumed to be dead
+            self.transport.close()
+            return
+        self.logger.warning(f"Timeout reached for {self.client_ip}:{self.client_port}, resending block {self.state_config.block - 1}")
+        if self.state == ServerStates.RRQ:
+            self._handle_rrq_timeout()
+        elif self.state == ServerStates.WRQ:
+            self.send_error(packets.ErrorCode.ILLEGAL_OPERATION, "Write requests are not supported yet")
+            return
+        else:
+            self.logger.error(f"Timeout in unexpected state {self.state} for {self.client_ip}:{self.client_port}")
+            self.transport.close()
+            return
+        self._counters.retries += 1
+        self._reset_timeout()
+
+    def _handle_rrq_timeout(self):
+        """
+        Handle the timeout event for RRQ state.
+        If the maximum number of retries is reached, close the connection.
+        Otherwise, resend the last data block.
+        """
+        self.state_config.block -= 1
+        self.send_data_block()
+
     def connection_lost(self, exc):
         self.logger.info(f"Closing connection with {self.client_ip}:{self.client_port}")
+        self._cancel_timeout()
         return super().connection_lost(exc)
         
 
