@@ -10,6 +10,26 @@ This program uses asyncio as its main runtime to ensure it is able to handle mul
 # Testing
 run the test_get.sh in the `tests/` directoryto perform e2e testing of the tftp server. Make sure that your python environment is activated before running the tests, as the tests will run the server automatically for you
 
+# Custom Configuration
+
+You can specify custom configuration options using command-line arguments when running the TFTP server.
+
+## Command-Line Arguments
+The following options are available:
+
+- `--host`: Host to bind the TFTP server (default: `0.0.0.0`).
+- `--port`: Port to bind the TFTP server (default: `69`).
+- `--max-block-size`: Maximum block size for file transfers (default: `512`).
+- `--timeout`: Timeout in seconds for client responses (default: `1`).
+- `--retries`: Number of retries for failed transfers (default: `3`).
+- `--file-directory`: Directory to serve files from (default: `/tmp/tftp`).
+
+## Example Usage
+To run the server with default settings:
+```bash
+python run.py
+```
+
 # How it works
 When the tftp server `listen()` function is called (when start is called)
 # Limitations
