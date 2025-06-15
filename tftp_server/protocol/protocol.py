@@ -5,6 +5,8 @@ from enum import Enum
 from dataclasses import dataclass
 from tftp_server.protocol.files_handler import get_file, FileType
 
+MAX_BLOCK_VALUE = 65535
+
 @dataclass
 class TftpCounters:
     """
@@ -40,6 +42,7 @@ class RrqConfig(StateConfig):
     """
     file_data: str = None  # filedata to send to the client (will be loading everything in memory)
     file_size: int = None
+    block_overflows: int = 0  # number of times the block overflows in the protocol, as it is only 16 bits
 
 class ServerStates(Enum):
     """
@@ -185,16 +188,27 @@ class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
         precondition: self.state_config.file_data is not None, self.state is ServerStates.RRQ and self.state_config.block is a valid block number.
         """
         start = (self.state_config.block - 1) * self.block_size
+        if self.state_config.block_overflows > 0:
+            # the first time he protocol starts the block starts with 1 but when it overflows, it should start with 0
+            # although the protocol is not meant to be used with files of this size since the protocol is stop and wait
+            # to account for the overflows > 1 
+            start = (self.state_config.block_overflows - 1) * self.block_size * (MAX_BLOCK_VALUE + 1)
+            # to accound for the first overflow since the index starts at 1 for the first block
+            start += self.block_size * MAX_BLOCK_VALUE
+            start += self.state_config.block * self.block_size
+        end = start + self.block_size
         if start < self.state_config.file_size:
-            data_block = self.state_config.file_data[start:min((end := start + self.block_size, self.state_config.file_size))]
+            data_block = self.state_config.file_data[start:min(end, self.state_config.file_size)]
         else:
             data_block = "".encode()  # No more data to send, send an empty block to kill the connection
         data_packet = packets.DataPacket(block=self.state_config.block, data=data_block)
         self.transport.sendto(data_packet.get_bytes, (self.client_ip, self.client_port))
         self.logger.info(f"Sent block {self.state_config.block} to {self.client_ip}:{self.client_port}")        
         # Increment the block number for the next packet
-        self.state_config.block += 1
-        if (self.state_config.block - 1) * self.block_size > self.state_config.file_size: self.state = ServerStates.KILL
+        if self.state_config.block >= MAX_BLOCK_VALUE:
+            self.state_config.block_overflows += 1
+        self.state_config.block = (self.state_config.block + 1) % (MAX_BLOCK_VALUE + 1)
+        if end > self.state_config.file_size: self.state = ServerStates.KILL
 
     def handle_rrq_connection(self, packet: packets.AckPacket, addr) -> None:
         """
@@ -214,10 +228,10 @@ class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
             """
             self.send_error(packets.ErrorCode.UNKNOWN_TID, "Unexpected client address")
             return
-        if packet.block == self.state_config.block - 1:
+        if packet.block == (self.state_config.block - 1) % (MAX_BLOCK_VALUE + 1):
             self.send_data_block()    
         else:
-            self.logger.warning(f"Received ACK for block {packet.block} but expected block {self.state_config.block - 1}")
+            self.logger.warning(f"Received ACK for block {packet.block} but expected block {(self.state_config.block - 1) % (MAX_BLOCK_VALUE + 1)}")
 
     def _cancel_timeout(self):
         """
@@ -264,7 +278,11 @@ class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
         If the maximum number of retries is reached, close the connection.
         Otherwise, resend the last data block.
         """
-        self.state_config.block -= 1
+        if self.state_config.block == 0 and self.state_config.block_overflows > 0:
+            self.state_config.block_overflows -= 1
+            self.state_config.block = MAX_BLOCK_VALUE
+        else:
+            self.state_config.block -= 1
         self.send_data_block()
 
     def connection_lost(self, exc):

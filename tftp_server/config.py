@@ -30,7 +30,7 @@ class TftpConfig:
         if not isinstance(self.retries, int) or self.retries < 0:
             raise ValueError("Retries must be a non-negative integer.")
         if not isinstance(self.file_directory, str) or not self.is_directory_valid():
-            raise ValueError("File directory must be a non-empty string.")
+            raise ValueError("File directory must be a non-empty string and must exist.")
         
     def is_directory_valid(self):
         """
