@@ -193,7 +193,7 @@ class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
             # although the protocol is not meant to be used with files of this size since the protocol is stop and wait
             # to account for the overflows > 1 
             start = (self.state_config.block_overflows - 1) * self.block_size * (MAX_BLOCK_VALUE + 1)
-            # to accound for the first overflow since the index starts at 1 for the first block
+            # to account for the first overflow since the index starts at 1 for the first block
             start += self.block_size * MAX_BLOCK_VALUE
             start += self.state_config.block * self.block_size
         end = start + self.block_size
