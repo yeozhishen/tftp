@@ -14,3 +14,4 @@ run the test_get.sh in the `tests/` directoryto perform e2e testing of the tftp 
 When the tftp server `listen()` function is called (when start is called)
 # Limitations
 - currently a basic implementation of rrq is implemented
+- [option negatiation](https://datatracker.ietf.org/doc/html/rfc2347) is not supported (this server is pretty bare bones)
