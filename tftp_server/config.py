@@ -19,6 +19,7 @@ class TftpConfig:
     timeout: int = DEFAULT_TIMEOUT
     retries: int = DEFAULT_RETRIES
     file_directory: str = DEFAULT_DIR
+    single_port: bool = False
 
     def __post_init__(self):
         if not isinstance(self.port, int) or not (0 <= self.port <= 65535):

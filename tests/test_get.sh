@@ -11,7 +11,7 @@ TFTP_PORT=69
 TFTP_DIR="/tmp/tftp"
 JUNK_DIR="/tmp/tftp_junk"
 LOG_DIR="/tmp/tftp_test_logs"
-SERVER_CMD="python $PROJECT_ROOT/run.py --file-directory $TFTP_DIR --port $TFTP_PORT"
+SERVER_CMD="python $PROJECT_ROOT/run.py --file-directory $TFTP_DIR --port $TFTP_PORT --single-port"
 FILES=("small_file" "medium_file" "large_file")
 SIZES=("20M" "50M" "80M")
 

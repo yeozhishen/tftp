@@ -30,10 +30,31 @@ wheels = [
 ]
 
 [[package]]
+name = "expiring-dict"
+version = "1.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sortedcontainers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/12/7e71bb6aaf95e1e27994bfb87d0b8e73b0e4cfcfa64b611abd5088c7ac99/expiring_dict-1.1.2.tar.gz", hash = "sha256:ca8cb802304eae5b33a23ec4c19019b610adfda50cbc4c9bfa3ad5c2cd387631", size = 3714, upload-time = "2025-02-28T03:33:09.773Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/f7/be98b00881a13982675626ed20323ce276358b0d6bf9b370b030c6f6b22f/expiring_dict-1.1.2-py3-none-any.whl", hash = "sha256:fe5ac10c1e985edfba5f90666cf52ad295a93b4521f20dabcd769a9372d70905", size = 3764, upload-time = "2025-02-28T03:33:08.808Z" },
+]
+
+[[package]]
 name = "lru-cache"
 version = "0.2.3"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/1f/65/fb195865ef4c3c8f98b00531a4564c942e8f995fbc61ec7767881007ad8b/lru_cache-0.2.3.tar.gz", hash = "sha256:21cb5738eb8da421e48c373bb350bfbf6856647c05f5548a8be72cdd999ee6d4", size = 2188, upload-time = "2014-11-24T14:38:47.174Z" }
+
+[[package]]
+name = "sortedcontainers"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
+]
 
 [[package]]
 name = "tftp-server"
@@ -43,6 +64,7 @@ dependencies = [
     { name = "aiofiles" },
     { name = "async-lru" },
     { name = "asyncio" },
+    { name = "expiring-dict" },
     { name = "lru-cache" },
 ]
 
@@ -51,5 +73,6 @@ requires-dist = [
     { name = "aiofiles", specifier = ">=24.1.0" },
     { name = "async-lru", specifier = ">=2.0.5" },
     { name = "asyncio", specifier = ">=3.4.3" },
+    { name = "expiring-dict", specifier = ">=1.1.2" },
     { name = "lru-cache", specifier = ">=0.2.3" },
 ]

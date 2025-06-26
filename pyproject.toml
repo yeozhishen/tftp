@@ -8,5 +8,6 @@ dependencies = [
     "aiofiles>=24.1.0",
     "async-lru>=2.0.5",
     "asyncio>=3.4.3",
+    "expiring-dict>=1.1.2",
     "lru-cache>=0.2.3",
 ]

@@ -27,3 +27,13 @@ async def get_file(file_type: FileType, file_path: str) -> bytes|None:
         # Placeholder for online file fetching logic
         # This could be an HTTP request or any other method to fetch the file online
         pass
+
+@alru_cache(maxsize=128)
+async def get_file_single_mode(ip: str, port: str, file_type: FileType, file_path: str) -> bytes|None:
+    if file_type == FileType.on_disk:
+        result = await get_file_from_disk(file_path)
+        return (ip, port), result
+    elif file_type == FileType.online:
+        # Placeholder for online file fetching logic
+        # This could be an HTTP request or any other method to fetch the file online
+        pass

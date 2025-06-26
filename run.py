@@ -14,6 +14,7 @@ def parse_args():
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="Timeout in seconds for client responses (default: 1)")
     parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Number of retries for failed transfers (default: 3)")
     parser.add_argument("--file-directory", type=str, default=DEFAULT_DIR, help="Directory to serve files from (default: /tmp/tftp)")
+    parser.add_argument("--single-port", action='store_true', help="Use a single port for both read and write operations (default: False)")
     return parser.parse_args()
 
 
@@ -26,6 +27,7 @@ def main():
         timeout=args.timeout,
         retries=args.retries,
         file_directory=args.file_directory,
+        single_port=args.single_port
     )
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("TFTPServer")

@@ -3,8 +3,8 @@ import logging
 from tftp_server.protocol import packets
 from enum import Enum
 from dataclasses import dataclass
-from tftp_server.protocol.files_handler import get_file, FileType
-
+from tftp_server.protocol.files_handler import get_file, FileType, get_file_single_mode
+from expiring_dict import ExpiringDict
 MAX_BLOCK_VALUE = 65535
 
 @dataclass
@@ -55,11 +55,21 @@ class ServerStates(Enum):
     # state to indicate that the client should be killed
     KILL = 4
 
+@dataclass
+class SinglePortClient():
+    ip: str  # Client IP address
+    port: int # Client port number
+    state_config: StateConfig = None # Configuration for the current state
+    state: ServerStates = ServerStates.INITIAL
+
+
 class TftpServerProtocol(asyncio.DatagramProtocol):
     def __init__(self, server, logger: logging.Logger = None):
         self.server = server
         self.logger = logger
         self.transport = None
+        self.client_dict = ExpiringDict(max_len = 1000)  # Dictionary to hold client addresses and their corresponding ephemeral port protocols for single port mode
+        self.base_file_dir: str = self.server.config.file_directory
 
     def connection_made(self, transport) -> None:
         self.transport = transport
@@ -68,21 +78,144 @@ class TftpServerProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr) -> None:
         self.logger.info(f"Received data from {addr}: {data}")
         try:
-            asyncio.create_task(
-                asyncio.get_running_loop().create_datagram_endpoint(
-                    lambda: TftpEphemeralPortProtocol(base_file_dir=self.server.config.file_directory, 
-                                                      client_ip=addr[0], client_port=addr[1], 
-                                                      initial_data=data, logger=self.logger,
-                                                      file_block_size=self.server.config.max_block_size
-                                                      , timeout=self.server.config.timeout,
-                                                      retries=self.server.config.retries),
-                    local_addr=(self.server.config.host, 0) # binds to an ephemeral port
+            if not self.server.config.single_port:
+                asyncio.create_task(
+                    asyncio.get_running_loop().create_datagram_endpoint(
+                        lambda: TftpEphemeralPortProtocol(base_file_dir=self.server.config.file_directory, 
+                                                        client_ip=addr[0], client_port=addr[1], 
+                                                        initial_data=data, logger=self.logger,
+                                                        file_block_size=self.server.config.max_block_size
+                                                        , timeout=self.server.config.timeout,
+                                                        retries=self.server.config.retries),
+                        local_addr=(self.server.config.host, 0) # binds to an ephemeral port
+                    )
                 )
-            )
-            
+            else:
+                self.logger.info(f"Single port mode enabled, using existing port to serve {addr}")
+                if addr not in self.client_dict:
+                    #this is a new client, start a new connection
+                    self.client_dict[addr] = SinglePortClient(addr[0], addr[1])
+                    self.handle_new_connection(self.client_dict[addr], data)
+                else:
+                    self.handle_existing_connection(self.client_dict[addr], data, addr)
         except Exception as e:
-            self.logger.error(f"Error creating ephemeral port protocol: {e}")
-            return        
+            self.logger.error(f"Error in main protocol: {e}")
+            return
+    
+    def handle_new_connection(self, client: SinglePortClient, data) -> None:
+        initial_packet = packets.parse_packet(data)
+        if initial_packet is None:
+            self.logger.error("Failed to parse initial packet")
+            self.transport.close()
+            return
+        if initial_packet.opcode == packets.Opcode.RRQ:
+            self.logger.info(f"Received RRQ from {client.ip}:{client.port} for file: {initial_packet.filename}")
+            client.state = ServerStates.RRQ
+            try:
+                client.state_config = RrqConfig(filename=initial_packet.filename, mode=initial_packet.mode)
+                #get the file data
+                get_file_task = asyncio.create_task(
+                    get_file_single_mode(client.ip,client.port, FileType.on_disk, f"{self.base_file_dir}/{client.state_config.filename}")
+                )
+                get_file_task.add_done_callback(self._handle_get_file_task_result)
+            except ValueError as e:
+                self.send_error(client, packets.ErrorCode.ILLEGAL_OPERATION, str(e))
+                return
+        elif initial_packet.opcode == packets.Opcode.WRQ:
+            self.logger.info(f"Received WRQ from {client.ip}:{client.port} for file: {initial_packet.Filename}")
+            # Handle Write Request
+            # TODO: Implement file write logic
+            self.state = ServerStates.WRQ
+        else:
+            self.logger.error(f"Unsupported opcode {initial_packet.opcode} from {client.ip}:{client.port}")
+            return
+    
+    def handle_existing_connection(self, client: SinglePortClient, data: bytes, addr) -> None:
+        """
+        Handle existing connection for single port mode.
+        """
+        if client.state == ServerStates.RRQ:
+            packet = packets.parse_packet(data)
+            if packet is None:
+                self.logger.error(f"Failed to parse packet from {addr}")
+                self.send_error(client, packets.ErrorCode.ILLEGAL_OPERATION, "Invalid packet format")
+                return
+            if packet.opcode == packets.Opcode.ACK:
+                self.logger.info(f"Handling RRQ continuation for {client.state_config.filename} in mode {client.state_config.mode}")
+                self.handle_rrq_connection(client, packet, addr)
+            else:
+                self.logger.error(f"Received unexpected opcode {packet.opcode} in RRQ state from {addr}")
+                self.send_error(client, packets.ErrorCode.ILLEGAL_OPERATION, "Unexpected opcode in RRQ state")
+        elif client.state == ServerStates.WRQ:
+            self.logger.info(f"Received WRQ continuation from {addr}, but write requests are not supported yet")
+            self.send_error(client, packets.ErrorCode.ILLEGAL_OPERATION, "Write requests are not supported yet")
+        elif client.state == ServerStates.KILL:
+            self.logger.info(f"Single port feature is complete, killing connection with {addr}")
+            del self.client_dict[addr]
+        else:
+            self.logger.error(f"Received data in unexpected state {client.state} from {addr}")
+            self.send_error(client, packets.ErrorCode.ILLEGAL_OPERATION, "Unexpected state for received data")
+    
+    def handle_rrq_connection(self, client: SinglePortClient ,packet: packets.AckPacket, addr) -> None:
+        """
+        Handle RRQ continuation, when the server starts to request for more data packets.
+        """
+        if packet.block == (client.state_config.block - 1) % (MAX_BLOCK_VALUE + 1):
+            self.send_data_block(client)    
+        else:
+            self.logger.warning(f"Received ACK for block {packet.block} but expected block {(client.state_config.block - 1) % (MAX_BLOCK_VALUE + 1)}")
+
+    def _handle_get_file_task_result(self, future: asyncio.Future) -> None:
+        """
+        Handles the first time the client makes a request to the server and the file is fetched.
+        """
+        addr, file_data = future.result()
+        client = self.client_dict[addr]
+        if file_data is None:
+            self.logger.error(f"File {client.state_config.filename} not found or inaccessible")
+            self.send_error(packets.ErrorCode.NOT_FOUND, f"File {client.state_config.filename} not found")
+            return
+        client.state_config.file_data = file_data
+        client.state_config.file_size = len(file_data)
+        self.logger.info(f"File {client.state_config.filename} loaded successfully, sending data to client")
+        self.send_data_block(client)
+        # Send the first block of data
+
+    def send_data_block(self, client: SinglePortClient):
+        """
+        Send a block of data to the client.
+        precondition: self.state_config.file_data is not None, self.state is ServerStates.RRQ and self.state_config.block is a valid block number.
+        """
+        start = (client.state_config.block - 1) * self.server.config.max_block_size
+        if client.state_config.block_overflows > 0:
+            # the first time he protocol starts the block starts with 1 but when it overflows, it should start with 0
+            # although the protocol is not meant to be used with files of this size since the protocol is stop and wait
+            # to account for the overflows > 1 
+            start = (client.state_config.block_overflows - 1) * self.server.config.max_block_size * (MAX_BLOCK_VALUE + 1)
+            # to account for the first overflow since the index starts at 1 for the first block
+            start += self.server.config.max_block_size * MAX_BLOCK_VALUE
+            start += client.state_config.block * self.server.config.max_block_size
+        end = start + self.server.config.max_block_size
+        if start < client.state_config.file_size:
+            data_block = client.state_config.file_data[start:min(end, client.state_config.file_size)]
+        else:
+            data_block = "".encode()  # No more data to send, send an empty block to kill the connection
+        data_packet = packets.DataPacket(block=client.state_config.block, data=data_block)
+        self.transport.sendto(data_packet.get_bytes, (client.ip, client.port))
+        self.logger.info(f"Sent block {client.state_config.block} to {client.ip}:{client.port}")        
+        # Increment the block number for the next packet
+        if client.state_config.block >= MAX_BLOCK_VALUE:
+            client.state_config.block_overflows += 1
+        client.state_config.block = (client.state_config.block + 1) % (MAX_BLOCK_VALUE + 1)
+        if end > client.state_config.file_size: client.state = ServerStates.KILL
+
+
+    def send_error(self, client: SinglePortClient, error_code: packets.ErrorCode, error_message: str) -> None:
+        client.state = ServerStates.ERROR
+        error_packet = packets.ErrorPacket(error_code, error_message)
+        self.transport.sendto(error_packet.get_bytes, (client.ip, client.port))
+        self.logger.error(f"Sent error packet to {client.ip}:{client.port} with code {error_code} and message '{error_message}'")
+        
 
 class TftpEphemeralPortProtocol(asyncio.DatagramProtocol):
     def __init__(self, file_block_size: int, base_file_dir: str, client_ip: str
